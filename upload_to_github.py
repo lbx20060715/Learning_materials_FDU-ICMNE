@@ -25,9 +25,11 @@ def token():
     value = os.environ.get('GH_TOKEN') or os.environ.get('GITHUB_TOKEN')
     if value:
         return value
-    env = dict(os.environ, GIT_TERMINAL_PROMPT='0', GCM_INTERACTIVE='Never')
+    env = dict(os.environ, GIT_TERMINAL_PROMPT='0', GCM_INTERACTIVE='false',
+               GCM_GUI_PROMPT='false')
     try:
-        result = subprocess.run(['git', 'credential', 'fill'],
+        result = subprocess.run(['git', '-c', 'credential.interactive=false',
+                                 'credential', 'fill'],
             input='protocol=https\nhost=github.com\nusername=lbx20060715\n\n', capture_output=True,
             text=True, timeout=20, env=env)
         fields = dict(line.split('=', 1) for line in result.stdout.splitlines() if '=' in line)
@@ -35,10 +37,29 @@ def token():
             return fields['password']
         diagnostic = result.stderr.lower()
         if 'wincredman' in diagnostic:
-            raise RuntimeError('Windows Credential Manager could not access the saved credential. In your own PowerShell run: git credential-manager github login --username lbx20060715 --browser --force ; then retry this script.')
+            raise RuntimeError('Windows Credential Manager cannot read the saved credential. Repeated account selection will not fix this. Use a GH_TOKEN environment variable as an alternative; never send the token in chat.')
     except subprocess.TimeoutExpired:
         pass
     raise RuntimeError('No local GitHub credential. Log in with Git Credential Manager or set GH_TOKEN, then run again.')
+
+def configure_git_auth(secret):
+    # Reset inherited helpers first: credential.helper is multi-valued.
+    # Otherwise the system manager runs BEFORE our helper on every Git/LFS call.
+    values = [
+        ('credential.helper', ''),
+        ('credential.helper', '!python -c "import os,sys; sys.argv[1] == \'get\' and print(\'username=x-access-token\\npassword=\'+os.environ[\'COURSE_UPLOAD_TOKEN\'])"'),
+        ('credential.interactive', 'false'),
+    ]
+    # Windows drops empty environment values, so encode the reset in Git's
+    # quoted parameter format rather than GIT_CONFIG_VALUE_0=''.
+    os.environ.pop('GIT_CONFIG_COUNT', None)
+    os.environ['GIT_CONFIG_PARAMETERS'] = ' '.join(
+        "'" + (key + '=' + value).replace("'", "'\\''") + "'"
+        for key, value in values)
+    os.environ['COURSE_UPLOAD_TOKEN'] = secret
+    os.environ['GIT_TERMINAL_PROMPT'] = '0'
+    os.environ['GCM_INTERACTIVE'] = 'false'
+    os.environ['GCM_GUI_PROMPT'] = 'false'
 
 def api(path, secret, data=None):
     req = urllib.request.Request('https://api.github.com' + path,
@@ -62,6 +83,7 @@ def main():
     print('Authenticated:', user)
     if args.check_auth:
         return
+    configure_git_auth(secret)
     source, work = args.source.resolve(), args.work.resolve()
     if source == work or source in work.parents:
         raise RuntimeError('Work directory must be outside the source folder.')
@@ -95,12 +117,6 @@ def main():
     run(['git', 'config', 'user.name', user], work)
     run(['git', 'config', 'user.email', str(repo['owner']['id']) + '+' + user + '@users.noreply.github.com'], work)
     run(['git', 'lfs', 'install', '--local'], work)
-    # Supply the credential only through the child process environment.
-    os.environ['GIT_CONFIG_COUNT'] = '1'
-    os.environ['GIT_CONFIG_KEY_0'] = 'credential.helper'
-    os.environ['GIT_CONFIG_VALUE_0'] = '!python -c "import os; print(\'username=x-access-token\'); print(\'password=\'+os.environ[\'COURSE_UPLOAD_TOKEN\'])"'
-    os.environ['COURSE_UPLOAD_TOKEN'] = secret
-    os.environ['GIT_TERMINAL_PROMPT'] = '0'
     attrs = ['# Files over 100 MiB are stored with Git LFS.']
     all_files = []
     for subject in SUBJECTS:
