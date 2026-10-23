@@ -9,6 +9,8 @@ import json
 import os
 from pathlib import Path
 import shutil
+import filecmp
+import stat
 import subprocess
 import sys
 import urllib.error
@@ -20,6 +22,16 @@ SUBJECTS = ['程序设计', '大学物理B（上）', '大学物理B（下）', 
 def run(args, cwd=None, capture=False):
     return subprocess.run(args, cwd=cwd, check=True, text=True,
                           encoding='utf-8', stdout=subprocess.PIPE if capture else None)
+
+def copy_material(source, destination):
+    if destination.exists():
+        if filecmp.cmp(source, destination, shallow=False):
+            return
+        # copy2 preserves the source's read-only flag on Windows. Make only
+        # the generated working copy writable before replacing it.
+        destination.chmod(destination.stat().st_mode | stat.S_IWRITE)
+    shutil.copy2(source, destination)
+    destination.chmod(destination.stat().st_mode | stat.S_IWRITE)
 
 def token():
     value = os.environ.get('GH_TOKEN') or os.environ.get('GITHUB_TOKEN')
@@ -135,7 +147,7 @@ def main():
     (work / 'README.md').write_text('# 课程学习资料\n\n按科目保留原有目录结构。\n\n' +
         '\n'.join('- ' + subject for subject in SUBJECTS) +
         '\n\n大文件使用 Git LFS；完整下载请安装 Git LFS 后运行 `git lfs pull`。\n', encoding='utf-8')
-    shutil.copy2(Path(__file__), work / 'upload_to_github.py')
+    copy_material(Path(__file__), work / 'upload_to_github.py')
     def commit_push(message):
         run(['git', 'add', '--all'], work)
         changed = subprocess.run(['git', 'diff', '--cached', '--quiet'], cwd=work).returncode
@@ -153,7 +165,7 @@ def main():
                 continue
             dest = work / relative
             dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(item, dest)
+            copy_material(item, dest)
             batch_size += item.stat().st_size
             if batch_size >= 150 * 1024 * 1024:
                 commit_push('Upload ' + subject)
