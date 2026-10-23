@@ -129,6 +129,9 @@ def main():
     run(['git', 'config', 'user.name', user], work)
     run(['git', 'config', 'user.email', str(repo['owner']['id']) + '+' + user + '@users.noreply.github.com'], work)
     run(['git', 'lfs', 'install', '--local'], work)
+    # Course PDFs do not use LFS file locking. Avoid an unnecessary lock API
+    # request that can time out independently of the actual object upload.
+    run(['git', 'config', 'lfs.' + url + '.git/info/lfs.locksverify', 'false'], work)
     attrs = ['# Files over 100 MiB are stored with Git LFS.']
     all_files = []
     for subject in SUBJECTS:
